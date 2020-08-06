@@ -11,7 +11,10 @@ import os
 
 import pytest
 
+from getpass import getuser
+from ocs_ci.utility.utils import get_testrun_name
 from ocs_ci.framework import config as ocsci_config
+from uuid import uuid1
 from ocs_ci.framework.exceptions import (
     ClusterNameLengthError,
     ClusterNameNotProvidedError,
@@ -23,7 +26,9 @@ from ocs_ci.ocs.constants import (
     OCP_VERSION_CONF_DIR,
 )
 from ocs_ci.ocs.exceptions import CommandFailed, ResourceNotFoundError
+from ocs_ci.framework.testbed import reserve_testbed, release_testbed, check_request_met
 from ocs_ci.ocs.resources.ocs import get_ocs_csv, get_version_info
+from ocs_ci.utility.utils import TimeoutSampler
 from ocs_ci.ocs.utils import collect_ocs_logs, collect_prometheus_metrics
 from ocs_ci.utility.utils import (
     dump_config_to_file, get_ceph_version, get_cluster_name,
@@ -165,6 +170,30 @@ def pytest_addoption(parser):
             "Pattern or string to change in the CSV. Should contain the value to replace "
             "from and the value to replace to, separated by '::'"
         )
+        '--reserve',
+        default=False,
+        action="store_true",
+        dest='reserve_testbed',
+        help="Reserve next free available testbed"
+    )
+    parser.addoption(
+        '--reserve-timeout',
+        dest='reserve_timeout',
+        type=int,
+        default=3600,
+        help="Timeout in seconds for reservation to exit"
+    )
+    parser.addoption(
+        '--release',
+        dest='release_testbed',
+        action="store_true",
+        default=False,
+        help="release testbed reserved by testbed-name"
+    )
+    parser.addoption(
+        '--testbed-name',
+        dest='testbed_name',
+        help="name of the testbed to reserve or release"
     )
 
 
@@ -181,8 +210,13 @@ def pytest_configure(config):
     ocscilib_module = 'ocs_ci.framework.pytest_customization.ocscilib'
     if ocscilib_module not in config.getoption('-p'):
         return
+    if config.getoption('release_testbed'):
+        try_release_testbed(config)
+        exit(0)
     if not (config.getoption("--help") or config.getoption("collectonly")):
         process_cluster_cli_params(config)
+        if config.getoption('reserve_testbed'):
+            try_reserve_testbed(config)
         config_file = os.path.expanduser(
             os.path.join(
                 ocsci_config.RUN['log_dir'],
@@ -283,6 +317,43 @@ def gather_version_info_for_report(config):
                 "Failed to gather version details! The report of version might"
                 "not be complete!"
             )
+
+
+def try_reserve_testbed(config):
+    reserve = config.option.reserve_testbed
+    testbed_name = config.option.testbed_name or None
+    timeout = config.option.reserve_timeout
+    user = getuser()
+    launch_name = get_testrun_name() + user + uuid1().hex
+    ocsci_config.RUN['launch_name'] = launch_name
+    ocsci_config.RUN['testbed_name'] = testbed_name
+    ocsci_config.RUN['user'] = user
+    if reserve:
+        reserve_testbed(launch_name, testbed_name, timeout)
+        # check if we got the reservation
+        for ret in TimeoutSampler(timeout, 10, check_request_met, launch_name):
+            log.info(ret)
+            requestmet = ret[0]
+            if requestmet is True:
+                ocsci_config.RUN['testbed_name'] = ret[1]
+                ocsci_config.RUN['testbed_config'] = ret[2]
+                log.info(f"Successfully Reserved {ret[1]}")
+                return ret
+            else:
+                log.info("Waiting for testbed to be reserved")
+
+
+def try_release_testbed(config):
+    release = config.option.release_testbed
+    tb_name = ocsci_config.RUN.get('testbed_name', None)
+    if tb_name is None:
+        # try cli option
+        tb_name = config.option.testbed_name
+    if tb_name is None:
+        log.error("Empty Testbed Name in Config and CLI")
+        exit(1)
+    if release:
+        release_testbed(tb_name)
 
 
 def get_cli_param(config, name_of_param, default=None):
