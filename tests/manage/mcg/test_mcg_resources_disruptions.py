@@ -2,7 +2,7 @@ import logging
 import pytest
 
 from ocs_ci.framework.testlib import (
-    ManageTest, tier4, tier4a, ignore_leftovers, skipif_ocs_version, on_prem_platform_required
+    tier4, tier4a, ignore_leftovers, skipif_ocs_version, on_prem_platform_required
 )
 from ocs_ci.ocs.resources import pod
 from ocs_ci.ocs.resources.ocs import OCS
@@ -21,7 +21,7 @@ def setup(request):
 @tier4a
 @ignore_leftovers()
 @pytest.mark.usefixtures(setup.__name__)
-class TestMCGResourcesDisruptions(ManageTest):
+class TestMCGResourcesDisruptions(MCGTest):
     """
     Test MCG resources disruptions
 
